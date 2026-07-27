@@ -193,6 +193,18 @@ def _train(
 
 # Abstracted train function
 def train(model, dataset: str, epochs:int=5, batch_size:int=16, validation_steps:int=2500, patience:int=3, model_save_path:str='../Models/model.pt', log_save_path:str="../Logs/log.txt", ablation = False, run=1):
+    if not Path("../Datasets/").exists() or not Path("../Logs/").exists() or not Path("../Models/").exists() or not Path("../Results/").exists(): # If folder structure is incomplete
+        # Build it
+        datasets = ["2WikiMultihopQA", "HotpotQA", "MuSiQue"]
+        for dataset in datasets:
+            Path(f"../Datasets/{dataset}").mkdir(parents=True, exist_ok=True)
+            Path(f"../Logs/{dataset}/Ablation").mkdir(parents=True, exist_ok=True)
+            Path(f"../Logs/{dataset}/Generalize").mkdir(parents=True, exist_ok=True)
+            Path(f"../Models/{dataset}/Ablation").mkdir(parents=True, exist_ok=True)
+            Path(f"../Models/{dataset}/Generalize").mkdir(parents=True, exist_ok=True)
+            Path(f"../Results/{dataset}/Ablation").mkdir(parents=True, exist_ok=True)
+            Path(f"../Results/{dataset}/Generalize").mkdir(parents=True, exist_ok=True)
+
     # Load datasets depending on the selected one
     if dataset == 'HotpotQA':
         if not Path("../Datasets/HotpotQA/train.csv").exists(): # If the dataset was not generated yet, generate it

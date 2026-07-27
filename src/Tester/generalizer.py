@@ -1,9 +1,11 @@
 from ModelTrainer.modelStructures import GraphDataset, convert_to_tuple
 import ModelTrainer.trainer as trainer
 import Tester.tester as tester
+from ModelTrainer.graphFunctions import set_seed
 
 import pandas as pd
 import torch
+import random
 
 def generalization_test(model, original_dataset: str, runs : int = 5):
     # Define the other datasets
@@ -24,7 +26,7 @@ def generalization_test(model, original_dataset: str, runs : int = 5):
         probs, _, acc, cm, _, _, auc_score = tester.test(model, test_dataset)
         pos_probabilities = probs[:, 1]
         y_true = torch.cat([data.pyg_data.y for data in test_dataset], dim=0)
-        tester.generate_test_dashboard(cm, acc, auc_score, pos_probabilities, y_true, img_path=f"../Results/{test_dataset_name}/Generalize/[ZERO-SHOT] {original_dataset} generalizing for {test_dataset_name}; {run}.png", title=f"Zero-Shot generalization of {original_dataset} on {test_dataset_name}, {run})")
+        tester.generate_test_dashboard(cm, acc, auc_score, pos_probabilities, y_true, img_path=f"../Results/{test_dataset_name}/Generalize/[ZERO-SHOT] {original_dataset} generalizing for {test_dataset_name}; {run}.png", title=f"Zero-Shot generalization of {original_dataset} on {test_dataset_name}, {run} (seed {seed}))")
 
     # Fine-tuned generalization test
     for test_dataset_name, test_dataset in test_datasets:
@@ -32,8 +34,10 @@ def generalization_test(model, original_dataset: str, runs : int = 5):
         train_dataset  = GraphDataset(convert_to_tuple(train_df))
 
         for run in range(1, runs+1):
-            trainer._train(model, train_dataset, train_dataset, epochs=1, batch_size=32, validation_steps=500, model_save_path=f"../Models/{original_dataset}/GAT Generalizing on {test_dataset_name} {run}.pt") # Doesn't save the model since it is just a small fine-tune and validating in the train set it useless
+            seed = random.randint(1, 101)
+            set_seed(seed) # Reset the seed every run
+            trainer._train(model, train_dataset, train_dataset, epochs=1, batch_size=32, validation_steps=500, model_save_path=f"../Models/{original_dataset}/Generalize/GAT Generalizing on {test_dataset_name} {run}.pt", log_save_path=f"../Logs/{original_dataset}/Generalize/GAT {run} Ablation (seed {seed}).txt")
             probs, _, acc, cm, _, _, auc_score = tester.test(model, test_dataset)
             pos_probabilities = probs[:, 1]
             y_true = torch.cat([data.pyg_data.y for data in test_dataset], dim=0)
-            tester.generate_test_dashboard(cm, acc, auc_score, pos_probabilities, y_true, img_path=f"../Results/{test_dataset_name}/Generalize/[FEW-SHOT] {original_dataset} generalizing for {test_dataset_name}; {run}.png", title=f"Few-Shot generalization of {original_dataset} on {test_dataset_name}, {run})")
+            tester.generate_test_dashboard(cm, acc, auc_score, pos_probabilities, y_true, img_path=f"../Results/{test_dataset_name}/Generalize/[FEW-SHOT] {original_dataset} generalizing for {test_dataset_name}; {run}.png", title=f"Few-Shot generalization of {original_dataset} on {test_dataset_name}, {run} (seed {seed}))")

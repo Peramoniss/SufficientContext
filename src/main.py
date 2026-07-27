@@ -22,5 +22,5 @@ for run, seed in enumerate(seeds): # Use the same seeds as the normal traning
     set_seed(seed) # Reset the seed every run
     for dataset, vs in [("2WikiMultihopQA", 5000), ("HotpotQA", 2500), ("MuSiQue", 2500)]: # Different validation steps for each dataset since each has different length
         model = GATWithBERT(hidden_channels=32, num_classes=2, heads=8, dropout_rate=0.2, freeze_bert_layers=12) # Transfer learning ablation
-        train(model, dataset, epochs=1, batch_size=16, validation_steps=vs, model_save_path=f"../Models/{dataset}/Ablation/GAT {run} Ablation (seed {seed}).pt", log_save_path=f"../Logs/{dataset}/GAT {run} Ablation (seed {seed}).txt", run=run, ablation=True)
+        train(model, dataset, epochs=1, batch_size=16, validation_steps=vs, model_save_path=f"../Models/{dataset}/Ablation/GAT {run} Ablation (seed {seed}).pt", log_save_path=f"../Logs/{dataset}/Ablation/GAT {run} Ablation (seed {seed}).txt", run=run, ablation=True)
         generalization_test(model, dataset)

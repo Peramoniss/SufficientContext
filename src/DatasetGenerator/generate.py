@@ -141,8 +141,8 @@ def generate_musique_dataset():
     df_train_suff_treated = helper.get_sufficient_context_musique_format(df_train_suff)
     df_val_suff_treated = helper.get_sufficient_context_musique_format(df_val_suff)
 
-    df_train_insuff_treated = helper.get_sufficient_context_musique_format(df_train_insuff)
-    df_val_insuff_treated = helper.get_sufficient_context_musique_format(df_val_insuff)
+    df_train_insuff_treated = helper.get_insufficient_context_musique_format(df_train_insuff)
+    df_val_insuff_treated = helper.get_insufficient_context_musique_format(df_val_insuff)
 
     # Concatenate both subsets
     df_train_final = pd.concat([df_train_suff_treated, df_train_insuff_treated], ignore_index=True)

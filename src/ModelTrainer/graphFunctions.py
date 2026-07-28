@@ -8,15 +8,21 @@ from torch_geometric.data import Data
 import random
 
 BERT_MODEL = "bert-base-uncased" # Define hugging face's BERT model address
+SEED = 0
 
 # Set the seed in every randomness-dependent library 
 def set_seed(seed):
+    global SEED
+    SEED = seed
     np.random.seed(seed)
     random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
+
+def get_seed():
+    return SEED
 
 # Change BERT model dynamically, if wanted
 def set_bert(new_bert_model: str):

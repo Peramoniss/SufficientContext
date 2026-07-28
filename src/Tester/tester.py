@@ -1,3 +1,5 @@
+from ModelTrainer.graphFunctions import get_seed
+
 import torch
 from tqdm import tqdm
 from torch.utils.data import DataLoader as TorchDataLoader
@@ -280,4 +282,11 @@ def generate_test_dashboard(cm, acc, auc_score, probs, y_true, img_path='dashboa
     ax_bar.set_ylim(0, max(counts) * 1.12)
 
     plt.savefig(img_path, dpi=150, bbox_inches='tight') # Save the dashboard in the defined path
+
+    seed = get_seed()
+    folder_structure = img_path.rsplit('/', 1)[0] # Split from right to left, stop after one / found. Serves to mark which dataset is being used
+    folder_structure = folder_structure + "/results.csv" # Finish the path file
+    with open(folder_structure, "a") as f: # Save the results
+        f.write(f"{seed}, {acc}, {f1}, {precision}, {recall}, {auc_score}")
+        
     print(f"Saved → {img_path}")

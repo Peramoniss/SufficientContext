@@ -126,6 +126,7 @@ def get_sufficient_context_musique_format(df, desired_context_size : int = 5):
 
         df_suff_treated.at[i, 'context'] = contexts # Redefine os contextos no novo dataset
 
+    df_suff_treated['mixed'] = 0
     return df_suff_treated
 
 def get_insufficient_context_musique_format(df, desired_context_size : int = 5):
@@ -142,18 +143,17 @@ def get_insufficient_context_musique_format(df, desired_context_size : int = 5):
 
     # Verifies how to guarantee that 50% of the instances with at least one supporting fact (number_of_supporting_facts > 0) have their noise incorporated
     mixed_chance = df_insuff_treated.shape[0] * 0.5 / (df_insuff_treated.shape[0]  - df_insuff_treated["number_of_supporting_facts"].value_counts()[0])
-    df_insuff_treated["mixed"] = "No noise to add" # Assumes there's no noise, will change otherwise
+    df_insuff_treated["mixed"] = 0 # Assumes there's no noise, will change otherwise
     df_insuff_treated["context"] = None
     df_insuff_treated["size"] = 0
 
     for i, row in df.iterrows(): 
         contexts = []
         chunks_in_instance = 0 # More efficient than using len all the time
-        if row["number_of_supporting_facts"] > 0 and random.uniform(0, 1) < mixed_chance:
+        if row.get("number_of_supporting_facts", default=0) > 0 and random.uniform(0, 1) < mixed_chance:
             # mixed = True
             mixed_ctr = min(random.randint(1, row["number_of_supporting_facts"]), desired_context_size) # Defines how many supporting facts will be added (in randint, the maximum value is not included, so there will never be a case in which every supporting fact is added)
-            mixed_title = "With noise" 
-            df_insuff_treated.at[i, "mixed"] = mixed_title
+            df_insuff_treated.at[i, "mixed"] = 1
         else:
             # mixed = False
             mixed_ctr = 0

@@ -173,7 +173,7 @@ def _train(
 
                 model.train() # Restores training mode
     training_time = time.time() - start_time
-    logger.info(f"{training_time // 3600}h, {training_time % 3600 // 60}min, {training_time  % 60}s")
+    logger.info(f"{int(training_time // 3600)}h, {int(training_time % 3600 // 60)}min, {int(training_time  % 60)}s")
     if total_steps < validation_steps: # Didn't validate and didn't save the model
         torch.save({
                     'step': steps,
@@ -205,25 +205,24 @@ def train(model, dataset: str, epochs:int=5, batch_size:int=16, validation_steps
             Path(f"../Results/{dataset}/Ablation").mkdir(parents=True, exist_ok=True)
             Path(f"../Results/{dataset}/Generalize").mkdir(parents=True, exist_ok=True)
 
+    # Guarantees every dataset was generated (since generalization needs all of them, all of them are needed from the start)
+    if not Path("../Datasets/HotpotQA/train.csv").exists(): # If the dataset was not generated yet, generate it
+        generator.generate_hotpot_qa_dataset()
+    if not Path("../Datasets/2WikiMultihopQA/train.csv").exists():
+        generator.generate_2wikimultihop_qa_dataset()
+    if not Path("../Datasets/MuSiQue/train.csv").exists():
+        generator.generate_musique_dataset()
+
     # Load datasets depending on the selected one
     if dataset == 'HotpotQA':
-        if not Path("../Datasets/HotpotQA/train.csv").exists(): # If the dataset was not generated yet, generate it
-            generator.generate_hotpot_qa_dataset()
-
         train_df = pd.read_csv("../Datasets/HotpotQA/train.csv")
         val_df = pd.read_csv("../Datasets/HotpotQA/val.csv")
         test_df = pd.read_csv("../Datasets/HotpotQA/test.csv")
     elif dataset == '2WikiMultihopQA':
-        if not Path("../Datasets/2WikiMultihopQA/train.csv").exists():
-            generator.generate_2wikimultihop_qa_dataset()
-
         train_df = pd.read_csv("../Datasets/2WikiMultihopQA/train.csv")
         val_df = pd.read_csv("../Datasets/2WikiMultihopQA/val.csv")
         test_df = pd.read_csv("../Datasets/2WikiMultihopQA/test.csv")
     elif dataset == 'MuSiQue':
-        if not Path("../Datasets/MuSiQue/train.csv").exists():
-            generator.generate_musique_dataset()
-
         train_df = pd.read_csv("../Datasets/MuSiQue/train.csv")
         val_df = pd.read_csv("../Datasets/MuSiQue/val.csv")
         test_df = pd.read_csv("../Datasets/MuSiQue/test.csv")
@@ -236,9 +235,9 @@ def train(model, dataset: str, epochs:int=5, batch_size:int=16, validation_steps
 
     # Train and test the model
     losses, val_losses, accuracies, val_accuracies = _train(model, train_dataset, val_dataset, epochs=epochs, batch_size=batch_size, validation_steps=validation_steps, patience=patience, model_save_path=model_save_path, log_save_path=log_save_path)
-    tester.generate_training_dashboard(losses, val_losses, accuracies, val_accuracies, steps_until_val=2500, img_path=f"../Results/{dataset}/{"Ablation/" if ablation else ''}[TRAIN] {dataset}; {run}.png", title=f"GAT Training ({dataset}, {run})")
+    tester.generate_training_dashboard(losses, val_losses, accuracies, val_accuracies, steps_until_val=validation_steps, img_path=f"../Results/{dataset}/{'Ablation/' if ablation else ''}[TRAIN] {dataset}; {run}.png", title=f"GAT Training ({dataset}, {run})")
     
     probs, _, acc, cm, _, _, auc_score = tester.test(model, test_dataset, batch_size=batch_size*2)
     pos_probabilities = probs[:, 1]
     y_true = torch.cat([data.pyg_data.y for data in test_dataset], dim=0)
-    tester.generate_test_dashboard(cm, acc, auc_score, pos_probabilities, y_true, img_path=f"../Results/{dataset}/{"Ablation/" if ablation else ''}[TEST] {dataset}; {run}.png", title=f"GAT Testing ({dataset}, {run})")
+    tester.generate_test_dashboard(cm, acc, auc_score, pos_probabilities, y_true, img_path=f"../Results/{dataset}/{'Ablation/' if ablation else ''}[TEST] {dataset}; {run}.png", title=f"GAT Testing ({dataset}, {run})")

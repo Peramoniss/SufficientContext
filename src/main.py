@@ -14,7 +14,7 @@ for run in range(1, RUNS_PER_TRAINING+1): # Five runs per training, to show it i
         # Train every dataset with the same seed before moving to another
         model = GATWithBERT(hidden_channels=32, num_classes=2, heads=8, dropout_rate=0.2, freeze_bert_layers=6)
         train(model, dataset, epochs=1, batch_size=16, validation_steps=vs, model_save_path=f"../Models/{dataset}/GAT {run} (seed {seed}).pt", log_save_path=f"../Logs/{dataset}/GAT {run} (seed {seed}).txt", run=run)
-        generalization_test(model, dataset)
+        generalization_test(model, dataset, calling_run=run, seed=seed)
 
 # TODO: Pensar em quais serão as ablações
 # Ablation

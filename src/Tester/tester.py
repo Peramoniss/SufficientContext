@@ -286,7 +286,11 @@ def generate_test_dashboard(cm, acc, auc_score, probs, y_true, img_path='dashboa
     seed = get_seed()
     folder_structure = img_path.rsplit('/', 1)[0] # Split from right to left, stop after one / found. Serves to mark which dataset is being used
     folder_structure = folder_structure + "/results.csv" # Finish the path file
+    if not Path(folder_structure).exists(): # If the file doesn't exist, create the file with the header
+        with open(folder_structure, "w") as f:
+            f.write("Seed, Accuracy, F1-Score, Precision, Recall, AUC\n")
+
     with open(folder_structure, "a") as f: # Save the results
-        f.write(f"{seed}, {acc}, {f1}, {precision}, {recall}, {auc_score}")
-        
+        f.write(f"{seed}, {acc}, {f1}, {precision}, {recall}, {auc_score}\n")
+
     print(f"Saved → {img_path}")

@@ -45,19 +45,19 @@ class GraphDataset(Dataset):
 
 # Converts the dataframe loaded from a csv into a tuple containing the question, a list of context chunks, and the label/target value 
 def convert_to_tuple(df):
-  question_context_tuples = []
-  for row in df.iterrows():
-    row_data = row[1]
-    question = row_data['question']
-    label = row_data['label']
-    chunks = ast.literal_eval(row_data['context'])
-    chunks_list = []
-    for chunk in chunks:
-      chunks_list.append(chunk)
+    question_context_tuples = []
+    for row in df.iterrows():
+        row_data = row[1]
+        question = row_data['question']
+        label = row_data['label']
+        chunks = ast.literal_eval(row_data['context'])
+        chunks_list = []
+        for chunk in chunks:
+            chunks_list.append(chunk)
 
-    question_context_tuples.append( (question, chunks_list, label) )
+        question_context_tuples.append( (question, chunks_list, label) )
 
-  return question_context_tuples
+    return question_context_tuples
 
 # Process the text and generate embeddings to them, associating the embeddings with the graph nodes
 class BertNodeEmbedder(nn.Module):

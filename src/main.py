@@ -3,11 +3,15 @@ from ModelTrainer.trainer import train
 from ModelTrainer.graphFunctions import set_seed
 import random
 from Tester.generalizer import generalization_test
+import torch
 
+print("GPU count:", torch.cuda.device_count())
 seeds = []
 RUNS_PER_TRAINING = 2 # TODO: It's 5 instead
 for run in range(1, RUNS_PER_TRAINING+1): # Five runs per training, to show it isn't a lucky seed 
     seed = random.randint(1, 101)
+    while seed in seeds: # Avoid repeated seeds
+        seed = random.randint(1, 101)
     set_seed(seed) # Reset the seed every run
     seeds.append(seed)
     for dataset, vs in [("2WikiMultihopQA", 5000), ("HotpotQA", 2500), ("MuSiQue", 2500)]: # Different validation steps for each dataset since each has different length

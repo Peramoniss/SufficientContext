@@ -49,6 +49,7 @@ def _train(
         val_dataset, batch_size=batch_size,
         shuffle=False, collate_fn=_collate
     )
+    # print(f"DataLoader batch_size={train_loader.batch_size}, len={len(train_loader)}, dataset_len={len(train_dataset)}")
 
     # Sets different learning rates for BERT and the GNN to avoid catastrophic forgetting
     optimizer = torch.optim.AdamW([
@@ -196,14 +197,14 @@ def train(model, dataset: str, epochs:int=5, batch_size:int=16, validation_steps
     if not Path("../Datasets/").exists() or not Path("../Logs/").exists() or not Path("../Models/").exists() or not Path("../Results/").exists(): # If folder structure is incomplete
         # Build it
         datasets = ["2WikiMultihopQA", "HotpotQA", "MuSiQue"]
-        for dataset in datasets:
-            Path(f"../Datasets/{dataset}").mkdir(parents=True, exist_ok=True)
-            Path(f"../Logs/{dataset}/Ablation").mkdir(parents=True, exist_ok=True)
-            Path(f"../Logs/{dataset}/Generalize").mkdir(parents=True, exist_ok=True)
-            Path(f"../Models/{dataset}/Ablation").mkdir(parents=True, exist_ok=True)
-            Path(f"../Models/{dataset}/Generalize").mkdir(parents=True, exist_ok=True)
-            Path(f"../Results/{dataset}/Ablation").mkdir(parents=True, exist_ok=True)
-            Path(f"../Results/{dataset}/Generalize").mkdir(parents=True, exist_ok=True)
+        for curr_dataset in datasets:
+            Path(f"../Datasets/{curr_dataset}").mkdir(parents=True, exist_ok=True)
+            Path(f"../Logs/{curr_dataset}/Ablation").mkdir(parents=True, exist_ok=True)
+            Path(f"../Logs/{curr_dataset}/Generalize").mkdir(parents=True, exist_ok=True)
+            Path(f"../Models/{curr_dataset}/Ablation").mkdir(parents=True, exist_ok=True)
+            Path(f"../Models/{curr_dataset}/Generalize").mkdir(parents=True, exist_ok=True)
+            Path(f"../Results/{curr_dataset}/Ablation").mkdir(parents=True, exist_ok=True)
+            Path(f"../Results/{curr_dataset}/Generalize").mkdir(parents=True, exist_ok=True)
 
     # Guarantees every dataset was generated (since generalization needs all of them, all of them are needed from the start)
     if not Path("../Datasets/HotpotQA/train.csv").exists(): # If the dataset was not generated yet, generate it
@@ -227,17 +228,17 @@ def train(model, dataset: str, epochs:int=5, batch_size:int=16, validation_steps
         val_df = pd.read_csv("../Datasets/MuSiQue/val.csv")
         test_df = pd.read_csv("../Datasets/MuSiQue/test.csv")
     else:
-        raise ValueError(f'Dataset field is required and must be one of the following: HotpotQA, 2WikiMultihopQA, or MuSiQue. Value sent was {dataset}')
+        raise ValueError(f'Dataset field is required and must be one of the following: HotpotQA, 2WikiMultihopQA, or MuSiQue. Value sent was {curr_dataset}')
     
     train_dataset = GraphDataset(convert_to_tuple(train_df))
     val_dataset   = GraphDataset(convert_to_tuple(val_df))
     test_dataset  = GraphDataset(convert_to_tuple(test_df))
-
+    
     # Train and test the model
     losses, val_losses, accuracies, val_accuracies = _train(model, train_dataset, val_dataset, epochs=epochs, batch_size=batch_size, validation_steps=validation_steps, patience=patience, model_save_path=model_save_path, log_save_path=log_save_path)
-    tester.generate_training_dashboard(losses, val_losses, accuracies, val_accuracies, steps_until_val=validation_steps, img_path=f"../Results/{dataset}/{'Ablation/' if ablation else ''}[TRAIN] {dataset}; {run}.png", title=f"GAT Training ({dataset}, {run})")
+    tester.generate_training_dashboard(losses, val_losses, accuracies, val_accuracies, steps_until_val=validation_steps, img_path=f"../Results/{curr_dataset}/{'Ablation/' if ablation else ''}[TRAIN] {curr_dataset}; {run}.png", title=f"GAT Training ({curr_dataset}, {run})")
     
     probs, _, acc, cm, _, _, auc_score = tester.test(model, test_dataset, batch_size=batch_size*2)
     pos_probabilities = probs[:, 1]
     y_true = torch.cat([data.pyg_data.y for data in test_dataset], dim=0)
-    tester.generate_test_dashboard(cm, acc, auc_score, pos_probabilities, y_true, img_path=f"../Results/{dataset}/{'Ablation/' if ablation else ''}[TEST] {dataset}; {run}.png", title=f"GAT Testing ({dataset}, {run})")
+    tester.generate_test_dashboard(cm, acc, auc_score, pos_probabilities, y_true, img_path=f"../Results/{curr_dataset}/{'Ablation/' if ablation else ''}[TEST] {curr_dataset}; {run}.png", title=f"GAT Testing ({curr_dataset}, {run})")

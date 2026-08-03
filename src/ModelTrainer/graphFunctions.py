@@ -131,10 +131,10 @@ def filter_dependency_graph(G, structural_stopwords):
     return filtered_G
 
 def process_instance(question: str, chunks: list):
-    iter = [question] + chunks
+    iterr = [question] + chunks
 
     complete_G = None
-    for chunk in iter:
+    for chunk in iterr:
         G, _ = graphy(chunk)
         complete_G = G if complete_G is None else nx.compose(complete_G, G)
 

@@ -1,12 +1,13 @@
-numpy
-pandas
-matplotlib 
-tqdm
-datasets
-scikit-learn 
-transformers
-torch
-torch-geometric
-networkx
-spacy==3.8.2
+numpy==2.3.5
+pandas==2.3.3
+matplotlib==3.10.8
+tqdm==4.67.3
+datasets==4.6.1
+scikit-learn==1.8.0
+transformers==5.2.0
+--extra-index-url https://download.pytorch.org/whl/cu130
+torch==2.10.0+cu130
+torch-geometric==2.8.0
+networkx==3.6.1
+spacy==3.8.13
 en_core_web_lg @ https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl

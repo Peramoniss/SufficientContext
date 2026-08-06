@@ -171,6 +171,9 @@ def get_insufficient_context_musique_format(df, desired_context_size : int = 5):
                     contexts.pop()  # Remove a distractor
                     chunks_in_instance -= 1 
 
+            if chunks_in_instance == desired_context_size and mixed_ctr <= 0: # Se já tem o valor normal e não precisa adicionar um chunk necessário
+                break
+
         df_insuff_treated.at[i, "context"] = contexts
 
     return df_insuff_treated

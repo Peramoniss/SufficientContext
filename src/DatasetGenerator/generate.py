@@ -148,9 +148,9 @@ def generate_musique_dataset():
     df_train_final = pd.concat([df_train_suff_treated, df_train_insuff_treated], ignore_index=True)
     df_val_final = pd.concat([df_val_suff_treated, df_val_insuff_treated], ignore_index=True)
 
-    # # Drop irrelevant columns
-    # df_train_final.drop(columns=['supporting_facts'], inplace=True)
-    # df_val_final.drop(columns=['supporting_facts'], inplace=True)
+    # Drop irrelevant columns
+    df_train_final.drop(columns=['paragraphs', 'question_decomposition'], inplace=True)
+    df_val_final.drop(columns=['paragraphs', 'question_decomposition'], inplace=True)
 
     # Generate test dataset based on validation, respecting distribution
     strat_key = df_val_final["mixed"].astype(str) + "_" + df_val_final["label"].astype(str)

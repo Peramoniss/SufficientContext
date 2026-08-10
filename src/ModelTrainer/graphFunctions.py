@@ -1,4 +1,3 @@
-import gc
 import spacy
 from transformers import AutoTokenizer, AutoModel
 import networkx as nx
@@ -29,15 +28,10 @@ def set_bert(new_bert_model: str):
     global BERT_MODEL
     BERT_MODEL = new_bert_model
 
-# Clean GPU and RAM memory  
-def clean_memory():
-    torch.cuda.empty_cache()
-    gc.collect()
-
 nlp = spacy.load("en_core_web_lg", disable=["ner"]) # Dependency parser; syntactic knowledge 
 tokenizer  = AutoTokenizer.from_pretrained(BERT_MODEL)
-bert_model = AutoModel.from_pretrained(BERT_MODEL)
-bert_model.eval() # Fix BERT into evaluation mode until training occurs
+# bert_model = AutoModel.from_pretrained(BERT_MODEL)
+# bert_model.eval() # Fix BERT into evaluation mode until training occurs
 
 def graphy(text):
   doc = nlp(text) # Parse the text
@@ -130,6 +124,38 @@ def filter_dependency_graph(G, structural_stopwords):
 
     return filtered_G
 
+def precompute_bert_alignment(chunks: list):
+    """
+    Precomputes everything BertNodeEmbedder needs that only depends on
+    `chunks`, not on model weights or the training epoch:
+      - BERT token ids for the joined chunk text (no CLS/SEP, no truncation)
+      - Their character offsets
+      - spaCy word boundaries (start, end, lowercased text) for the same text
+
+    This used to be redone from scratch inside BertNodeEmbedder.forward on
+    every single forward pass. Since it only depends on `chunks`, it's safe
+    to compute once here and cache it on the Dataset item instead.
+    """
+    full_text = " ".join(chunks)
+
+    enc_chunk = tokenizer(
+        full_text,
+        return_offsets_mapping=True,
+        return_tensors="pt",
+        truncation=False
+    )
+    chunk_ids = enc_chunk["input_ids"][0][1:-1]        # strip CLS and final SEP
+    chunk_offsets = enc_chunk["offset_mapping"][0][1:-1]
+
+    doc = nlp(full_text)
+    # spaCy tokens are already left-to-right, so this list is sorted for free
+    spacy_bounds = [
+        (tok.idx, tok.idx + len(tok.text), tok.text.lower())
+        for tok in doc
+    ]
+
+    return chunk_ids, chunk_offsets, spacy_bounds
+
 def process_instance(question: str, chunks: list):
     iterr = [question] + chunks
 
@@ -142,7 +168,9 @@ def process_instance(question: str, chunks: list):
 
     pyg_graph, node_to_id = convert_nx_to_pyg(complete_G)
 
-    id_to_node = {v: k for k, v in node_to_id.items()} # Invert the node to id dictionary
-    node_words  = [id_to_node[i] for i in range(len(id_to_node))] # Convert to a list
+    id_to_node = {v: k for k, v in node_to_id.items()}
+    node_words  = [id_to_node[i] for i in range(len(id_to_node))]
 
-    return pyg_graph, node_words
+    chunk_ids, chunk_offsets, spacy_bounds = precompute_bert_alignment(chunks)
+
+    return pyg_graph, node_words, chunk_ids, chunk_offsets, spacy_bounds

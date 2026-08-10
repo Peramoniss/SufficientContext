@@ -15,4 +15,5 @@ RUN pip install -r requirements.txt
 
 WORKDIR /app/src
 
+RUN ulimit -n 1048576
 CMD ["python", "-u", "main.py"]

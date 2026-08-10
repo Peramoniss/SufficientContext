@@ -13,13 +13,15 @@ def _collate(batch: list):
     # Identity collate, the model handles its own batching. Necessary for paralelizing, appearently lambda is not handled well.
     return batch
 
-def test(model, test_dataset, batch_size=16):
+def test(model, test_dataset, batch_size=16, workers=0):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
 
     test_loader = TorchDataLoader(
         test_dataset, batch_size=batch_size,
-        shuffle=False,  collate_fn=_collate
+        shuffle=False,  collate_fn=_collate,
+        num_workers=workers, persistent_workers=True if workers > 0 else False,    # keeps workers (and their in-process cache) alive across epochs
+        prefetch_factor=2 if workers > 0 else None,          # each worker preloads several batches ahead
     )
     model.eval() # Switch dropout to evaluation behavior
 

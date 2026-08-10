@@ -1,5 +1,5 @@
 import ModelTrainer.graphFunctions as graphFunctions
-from transformers import AutoTokenizer, AutoModel
+from transformers import AutoModel
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -14,11 +14,14 @@ def load_model(path, model):
 
 # Container for easier accesss of the data 
 class NodeTextData:
-    def __init__(self, pyg_data, node_words: list[str], question: str, chunks: list[str]):
+    def __init__(self, pyg_data, node_words: list[str], question: str, chunks: list[str], chunk_ids: torch.Tensor, chunk_offsets: torch.Tensor, spacy_bounds: list[tuple]):
         self.pyg_data   = pyg_data      # torch_geometric.data.Data  (x is spaCy placeholder)
         self.node_words = node_words    # list[str], one entry per graph node
         self.question   = question
         self.chunks     = chunks
+        self.chunk_ids     = chunk_ids       # precomputed BERT ids for joined chunks
+        self.chunk_offsets = chunk_offsets   # precomputed char offsets, aligned to chunk_ids
+        self.spacy_bounds  = spacy_bounds    # precomputed [(start, end, word_lower), ...]
 
 # Generates the graph structure, collecting and creating multiple NodeTextData objects 
 class GraphDataset(Dataset):
@@ -32,16 +35,17 @@ class GraphDataset(Dataset):
 
     def _build_structure(self, idx):
         question, chunks, label = self.tuples[idx]
-        pyg_graph, node_words = graphFunctions.process_instance(question, chunks)
+        pyg_graph, node_words, chunk_ids, chunk_offsets, spacy_bounds = graphFunctions.process_instance(question, chunks)
         pyg_graph.y = torch.tensor([label], dtype=torch.long)
-        return NodeTextData(pyg_graph, node_words, question, chunks)
+        return NodeTextData(pyg_graph, node_words, question, chunks, chunk_ids, chunk_offsets, spacy_bounds)
 
-    def __getitem__(self, idx):
+    # TODO: REMOVE CACHE
+    def __getitem__(self, pos):
         if self.cache: # If using cache
-            if idx not in self._structure_cache: # Build the graph and save in cache in the first iteration, only returning the cached structure after that
-                self._structure_cache[idx] = self._build_structure(idx)
-            return self._structure_cache[idx]
-        return self._build_structure(idx) # If not, always build the structure
+            if pos not in self._structure_cache: # Build the graph and save in cache in the first iteration, only returning the cached structure after that
+                self._structure_cache[pos] = self._build_structure(pos)
+            return self._structure_cache[pos]
+        return self._build_structure(pos) # If not, always build the structure
 
 # Converts the dataframe loaded from a csv into a tuple containing the question, a list of context chunks, and the label/target value 
 def convert_to_tuple(df):
@@ -63,126 +67,113 @@ def convert_to_tuple(df):
 class BertNodeEmbedder(nn.Module):
     def __init__(self, bert_model_name: str = "bert-base-uncased"):
         super().__init__()
-        self.tokenizer = AutoTokenizer.from_pretrained(bert_model_name)
-        self.bert = AutoModel.from_pretrained(bert_model_name)
+        # self.tokenizer = AutoTokenizer.from_pretrained(bert_model_name)
+        self.tokenizer = graphFunctions.tokenizer
+        self.bert = AutoModel.from_pretrained(graphFunctions.BERT_MODEL) # bert_model_name
+        # self.bert = graphFunctions.bert_model
 
-    def forward(self, node_words: list[str], question: str, chunks: list[str]) -> torch.Tensor:
+    def forward(self, node_words: list[str], question: str,
+            chunk_ids: torch.Tensor, chunk_offsets: torch.Tensor,
+            spacy_bounds: list[tuple]) -> torch.Tensor:
         device = next(self.bert.parameters()).device
-        MAX_LEN = self.bert.config.max_position_embeddings # Maximum tokens for the model
-        H = self.bert.config.hidden_size # Hidden size
+        MAX_LEN = self.bert.config.max_position_embeddings
+        H = self.bert.config.hidden_size
 
-        enc_query  = self.tokenizer(question, return_tensors="pt", truncation=False) # Tokenize query without truncating to the maximum
-        query_ids  = enc_query["input_ids"][0][1:-1] # strip CLS and final SEP
+        enc_query = self.tokenizer(question, return_tensors="pt", truncation=False)
+        query_ids = enc_query["input_ids"][0][1:-1]
 
-        # max_query_len = MAX_LEN // 2 # Leave at least half the context for the 
-        # if len(query_ids) > max_query_len:
-        #     query_ids = query_ids[:max_query_len]
+        chunk_budget = MAX_LEN - 3 - len(query_ids)
 
-        chunk_budget = MAX_LEN - 3 - len(query_ids) # The chunk might have up to chunk_budget tokens, considering that CLS, SEP (between query and context) and SEP (in the end) and the tokens used for the query
-
-        # Get SEP and CLS tokens
         sep_id = torch.tensor([self.tokenizer.sep_token_id])
         cls_id = torch.tensor([self.tokenizer.cls_token_id])
-        # query_tail_ids = torch.cat([query_ids, sep_id])
 
-        # Tokenize the full chunk text, keeping character offsets to match subword tokens with word tokens later
-        full_text = " ".join(chunks)
-        enc_chunk = self.tokenizer(
-            full_text,
-            return_offsets_mapping=True,
-            return_tensors="pt",
-            truncation=False
-        )
-        all_chunk_ids = enc_chunk["input_ids"][0][1:-1] # strip CLS and final SEP
-        all_offsets = enc_chunk["offset_mapping"][0][1:-1] # strip CLS and final SEP
+        all_chunk_ids = chunk_ids          # now precomputed, passed in
+        all_offsets = chunk_offsets        # now precomputed, passed in
         num_chunk_tokens = len(all_chunk_ids)
 
-        # Generate windows of chunks, accumulating hidden states per token position
-        # position_hidden: chunk token index → list of hidden vectors
         position_hidden: dict[int, list[torch.Tensor]] = {}
 
-        step = max(1, chunk_budget // 2) # How much the window slide before encoding the next window 
+        # step = max(1, chunk_budget // 2)
+        step = max(1, chunk_budget * 3 // 4) # Passos mais largos
         window_start = 0
 
         while window_start < num_chunk_tokens:
-            window_end = min(window_start + chunk_budget, num_chunk_tokens) # End the window considering the maximum context length, with caution not to end within the actual text
-            window_ids = all_chunk_ids[window_start:window_end] # Get only the tokens in this window
+            window_end = min(window_start + chunk_budget, num_chunk_tokens)
+            window_ids = all_chunk_ids[window_start:window_end]
 
-            # Create the text processed by BERT: [CLS] query [SEP] chunk_window [SEP]
             input_ids = torch.cat([
-                cls_id,
-                query_ids,
-                sep_id,
-                window_ids,
-                sep_id
+                cls_id, query_ids, sep_id, window_ids, sep_id
             ]).unsqueeze(0).to(device)
 
-            attention_mask  = torch.ones_like(input_ids) # No padding
-            type_0_len      = 1 + len(query_ids) + 1 # CLS + query + SEP
-            type_1_len      = len(window_ids) + 1 # chunk + SEP
-            token_type_ids  = torch.cat([
+            attention_mask = torch.ones_like(input_ids)
+            type_0_len = 1 + len(query_ids) + 1
+            type_1_len = len(window_ids) + 1
+            token_type_ids = torch.cat([
                 torch.zeros(type_0_len, dtype=torch.long),
                 torch.ones(type_1_len, dtype=torch.long)
-            ]).unsqueeze(0).to(device) # Type ids inform that those are two different sentences
+            ]).unsqueeze(0).to(device)
 
             hidden = self.bert(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 token_type_ids=token_type_ids
-            ).last_hidden_state[0]   # [seq_len, H]
+            ).last_hidden_state[0]
 
-    
-            # Add the embedding to the list of embeddings for that token (global_i), using the local position to index it
             for local_i, global_i in enumerate(range(window_start, window_end)):
-                position_hidden.setdefault(global_i, []).append(hidden[local_i + type_0_len]) # type_0_len represents CLS + query + SEP, marking the start of the chunk
+                position_hidden.setdefault(global_i, []).append(hidden[local_i + type_0_len])
 
             if window_end == num_chunk_tokens:
                 break
-            window_start += step # Move the window
+            window_start += step
 
-        # Average the tokens embeddings across windows, resulting in one vector per token position
         position_embedding: dict[int, torch.Tensor] = {
             pos: torch.stack(vecs).mean(dim=0)
             for pos, vecs in position_hidden.items()
         }
 
-        
-        doc = graphFunctions.nlp(full_text) # Build spaCy doc to map subwords to words
+        # --- Fast pointer-based matching, no spaCy call, no rescans ---
         token_vecs: dict[str, list[torch.Tensor]] = {}
+        num_spacy = len(spacy_bounds)
+        tok_ptr = 0
 
-        for global_i, (char_start, char_end) in enumerate(all_offsets.tolist()):
-            if char_start == char_end: # If padding or special token
+        offsets_list = all_offsets.tolist()
+
+        for global_i, (char_start, char_end) in enumerate(offsets_list):
+            if char_start == char_end:
                 continue
-            if global_i not in position_embedding: # If subword token has no embedding
+            if global_i not in position_embedding:
                 continue
-            for spacy_tok in doc: # For each work token 
-                tok_start = spacy_tok.idx
-                tok_end   = spacy_tok.idx + len(spacy_tok.text)
-                # If subword is within word, add the embedding to the list of embeddings of that word
-                if char_start >= tok_start and char_end <= tok_end: 
-                    token_vecs.setdefault(spacy_tok.text.lower(), []).append(position_embedding[global_i])
+
+            while tok_ptr < num_spacy and spacy_bounds[tok_ptr][1] < char_start:
+                tok_ptr += 1
+
+            j = tok_ptr
+            while j < num_spacy:
+                tok_start, tok_end, tok_text = spacy_bounds[j]
+                if tok_start > char_end:
                     break
+                if char_start >= tok_start and char_end <= tok_end:
+                    token_vecs.setdefault(tok_text, []).append(position_embedding[global_i])
+                    break
+                j += 1
 
-        # Average the subword emebddings within the same word, resulting in word embeddings
         word_to_embedding: dict[str, torch.Tensor] = {
             word: torch.stack(vecs).mean(dim=0)
             for word, vecs in token_vecs.items()
         }
 
-        # Reorder the embeddings to the node_words order
         embeddings = []
         for word in node_words:
             if word in word_to_embedding:
                 embeddings.append(word_to_embedding[word])
             else:
-                # Fallback for any errors, should never happen
                 all_vecs = list(word_to_embedding.values())
                 if all_vecs:
                     embeddings.append(torch.stack(all_vecs).mean(dim=0))
                 else:
                     embeddings.append(torch.zeros(H, device=device))
 
-        return torch.stack(embeddings) # [N, H]
+        return torch.stack(embeddings)
 
 class GATWithBERT(nn.Module):
     def __init__(
@@ -242,7 +233,8 @@ class GATWithBERT(nn.Module):
             words = item.node_words
 
             # Embed the chunks considering the question, ordering with the same index as words
-            x = self.embedder(words, item.question, item.chunks) # [words, dim], in BERT, [words, 768]
+            # x = self.embedder(words, item.question, item.chunks) # [words, dim], in BERT, [words, 768]
+            x = self.embedder(words, item.question, item.chunk_ids, item.chunk_offsets, item.spacy_bounds)
 
             edge_index = pyg.edge_index.to(device)
             batch_vec  = torch.zeros(x.shape[0], dtype=torch.long, device=device)

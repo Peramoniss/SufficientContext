@@ -1,5 +1,4 @@
 import DatasetGenerator.generate as generator
-import ModelTrainer.graphFunctions as graphFunctions
 from ModelTrainer.modelStructures import GraphDataset, convert_to_tuple
 import Tester.tester as tester
 import torch
@@ -12,21 +11,19 @@ import os
 from pathlib import Path
 import time
 import logging
+import gc
+
+# Clean GPU and RAM memory  
+def clean_memory():
+    torch.cuda.empty_cache()
+    gc.collect()
 
 def _collate(batch: list):
     # Identity collate, the model handles its own batching. Necessary for paralelizing, appearently lambda is not handled well.
     return batch
 
 # Training function, without the abstraction management of train()
-def _train(
-    model, train_dataset, val_dataset,
-    epochs=20, lr_bert=2e-5, lr=2e-4,
-    batch_size=8,
-    validation_steps=50,
-    patience=3,
-    model_save_path="best_gnn_bert.pt", load_if_exist = False,
-    log_save_path="log.txt"
-):
+def _train(model, train_dataset, val_dataset, epochs=20, lr_bert=2e-5, lr=2e-4, batch_size=8, validation_steps=50, patience=3, workers=0, model_save_path="best_gnn_bert.pt", load_if_exist = False, log_save_path="log.txt"):
     # Setup logging
     logging.basicConfig(
         level=logging.INFO,
@@ -37,17 +34,21 @@ def _train(
         ]
     )
     logger = logging.getLogger()
-    
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
 
     train_loader = TorchDataLoader(
-        train_dataset, batch_size=batch_size,
-        shuffle=True,  collate_fn=_collate
+        train_dataset, batch_size=batch_size, 
+        shuffle=True,  collate_fn=_collate,
+        num_workers=workers, persistent_workers=True if workers > 0 else False,    # keeps workers (and their in-process cache) alive across epochs
+        prefetch_factor=2 if workers > 0 else None,          # each worker preloads several batches ahead
     )
     val_loader = TorchDataLoader(
         val_dataset, batch_size=batch_size,
-        shuffle=False, collate_fn=_collate
+        shuffle=False, collate_fn=_collate,
+        num_workers=workers, persistent_workers=False,    # Cache is less helpful here, and this helps keeping the memory
+        prefetch_factor=2 if workers > 0 else None,          # each worker preloads several batches ahead
     )
     # print(f"DataLoader batch_size={train_loader.batch_size}, len={len(train_loader)}, dataset_len={len(train_dataset)}")
 
@@ -93,7 +94,7 @@ def _train(
 
     start_time = time.time()
     for epoch in epochs_range:
-        graphFunctions.clean_memory() # Memory management
+        clean_memory() # Memory management
         model.train() # Changes the behavior of dropout to training
         total_loss, train_correct, train_total = 0.0, 0, 0
 
@@ -165,7 +166,7 @@ def _train(
                         'best_val_loss': best_val_loss,
                         'patience_ctr': patience_ctr,
                     }, model_save_path)
-                    logger.info("  ✓ saved best model")
+                    logger.info(f"  ✓ saved best model at {model_save_path}")
                 else: # Otherwise, update the counter for patience (number of validations that the model can go through without improvement)
                     patience_ctr += 1
                     if patience_ctr >= patience:
@@ -174,7 +175,7 @@ def _train(
 
                 model.train() # Restores training mode
     training_time = time.time() - start_time
-    logger.info(f"{int(training_time // 3600)}h, {int(training_time % 3600 // 60)}min, {int(training_time  % 60)}s")
+    logger.info(f"Training ended. Duration: {int(training_time // 3600)}h, {int(training_time % 3600 // 60)}min, {int(training_time  % 60)}s")
     if total_steps < validation_steps: # Didn't validate and didn't save the model
         torch.save({
                     'step': steps,
@@ -189,11 +190,12 @@ def _train(
                     'best_val_loss': best_val_loss,
                     'patience_ctr': patience_ctr,
                 }, model_save_path)
-        logger.info("  ✓ saved model")
+        logger.info(f"  ✓ saved unvalidated model at {model_save_path}")
+    del train_loader, val_loader # Guarantees this mess is deleted
     return losses, val_losses, accuracies, val_accuracies
 
 # Abstracted train function
-def train(model, dataset: str, epochs:int=5, batch_size:int=16, validation_steps:int=2500, patience:int=3, model_save_path:str='../Models/model.pt', log_save_path:str="../Logs/log.txt", ablation = False, run=1):
+def train(model, dataset: str, epochs:int=5, batch_size:int=16, validation_steps:int=2500, patience:int=3, workers:int=0, model_save_path:str='../Models/model.pt', log_save_path:str="../Logs/log.txt", ablation = False, run=1):
     if not Path("../Datasets/").exists() or not Path("../Logs/").exists() or not Path("../Models/").exists() or not Path("../Results/").exists(): # If folder structure is incomplete
         # Build it
         datasets = ["2WikiMultihopQA", "HotpotQA", "MuSiQue"]
@@ -228,17 +230,17 @@ def train(model, dataset: str, epochs:int=5, batch_size:int=16, validation_steps
         val_df = pd.read_csv("../Datasets/MuSiQue/val.csv")
         test_df = pd.read_csv("../Datasets/MuSiQue/test.csv")
     else:
-        raise ValueError(f'Dataset field is required and must be one of the following: HotpotQA, 2WikiMultihopQA, or MuSiQue. Value sent was {curr_dataset}')
+        raise ValueError(f'Dataset field is required and must be one of the following: HotpotQA, 2WikiMultihopQA, or MuSiQue. Value sent was {dataset}')
     
     train_dataset = GraphDataset(convert_to_tuple(train_df))
     val_dataset   = GraphDataset(convert_to_tuple(val_df))
     test_dataset  = GraphDataset(convert_to_tuple(test_df))
     
     # Train and test the model
-    losses, val_losses, accuracies, val_accuracies = _train(model, train_dataset, val_dataset, epochs=epochs, batch_size=batch_size, validation_steps=validation_steps, patience=patience, model_save_path=model_save_path, log_save_path=log_save_path)
-    tester.generate_training_dashboard(losses, val_losses, accuracies, val_accuracies, steps_until_val=validation_steps, img_path=f"../Results/{curr_dataset}/{'Ablation/' if ablation else ''}[TRAIN] {curr_dataset}; {run}.png", title=f"GAT Training ({curr_dataset}, {run})")
+    losses, val_losses, accuracies, val_accuracies = _train(model, train_dataset, val_dataset, epochs=epochs, batch_size=batch_size, validation_steps=validation_steps, patience=patience, workers=workers, model_save_path=model_save_path, log_save_path=log_save_path)
+    tester.generate_training_dashboard(losses, val_losses, accuracies, val_accuracies, steps_until_val=validation_steps, img_path=f"../Results/{dataset}/{'Ablation/' if ablation else ''}[TRAIN] {dataset}; {run}.png", title=f"GAT Training ({dataset}, {run})")
     
-    probs, _, acc, cm, _, _, auc_score = tester.test(model, test_dataset, batch_size=batch_size*2)
+    probs, _, acc, cm, _, _, auc_score = tester.test(model, test_dataset, batch_size=batch_size, workers=workers)
     pos_probabilities = probs[:, 1]
     y_true = torch.cat([data.pyg_data.y for data in test_dataset], dim=0)
-    tester.generate_test_dashboard(cm, acc, auc_score, pos_probabilities, y_true, img_path=f"../Results/{curr_dataset}/{'Ablation/' if ablation else ''}[TEST] {curr_dataset}; {run}.png", title=f"GAT Testing ({curr_dataset}, {run})")
+    tester.generate_test_dashboard(cm, acc, auc_score, pos_probabilities, y_true, img_path=f"../Results/{dataset}/{'Ablation/' if ablation else ''}[TEST] {dataset}; {run}.png", title=f"GAT Testing ({dataset}, {run})")

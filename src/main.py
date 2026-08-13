@@ -37,7 +37,7 @@ if __name__ == "__main__":
     # Ablation - Syntactic-only
     for run, seed in enumerate(seeds): # Use the same seeds as the normal traning
         set_seed(seed) # Reset the seed every run
-        for dataset, vs in [("2WikiMultihopQA", 5000), ("HotpotQA", 1250), ("MuSiQue", 1250)]: # Different validation steps for each dataset since each has different length
+        for dataset, vs in [("2WikiMultihopQA", 2500), ("HotpotQA", 1250), ("MuSiQue", 1250)]: # Different validation steps for each dataset since each has different length
             model = SyntacticGAT(hidden_channels=32, num_classes=2, heads=8, dropout_rate=0.2) 
             train(model, dataset, epochs=3, batch_size=BATCH_SIZE, validation_steps=vs, workers=WORKERS, model_save_path=f"../Models/{dataset}/Ablation/Syntactic-only GAT {run+1} Ablation (seed {seed}).pt", log_save_path=f"../Logs/{dataset}/Ablation/Syntactic-only {run+1} Ablation (seed {seed}).txt", run=run+1, ablation=True, dataset_class=SyntacticGraphDataset)
             generalization_test(model, dataset, calling_run=run+1, runs=RUNS_PER_TRAINING, seed=seed, batch_size=BATCH_SIZE, ablation=True, dataset_class=SyntacticGraphDataset)

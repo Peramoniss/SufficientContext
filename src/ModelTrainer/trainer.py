@@ -1,5 +1,5 @@
 import DatasetGenerator.generate as generator
-from ModelTrainer.modelStructures import GraphDataset, convert_to_tuple
+from ModelTrainer.modelStructures import GraphDataset, SyntacticGraphDataset, TextDataset, convert_to_tuple
 import Tester.tester as tester
 import torch
 import torch.nn as nn
@@ -41,24 +41,35 @@ def _train(model, train_dataset, val_dataset, epochs=20, lr_bert=2e-5, lr=2e-4, 
     train_loader = TorchDataLoader(
         train_dataset, batch_size=batch_size, 
         shuffle=True,  collate_fn=_collate,
-        num_workers=workers, persistent_workers=True if workers > 0 else False,    # keeps workers (and their in-process cache) alive across epochs
+        num_workers=workers, persistent_workers=False, #True if workers > 0 else False -> took it off since my memory can't support the cache    # keeps workers (and their in-process cache) alive across epochs
         prefetch_factor=2 if workers > 0 else None,          # each worker preloads several batches ahead
     )
     val_loader = TorchDataLoader(
         val_dataset, batch_size=batch_size,
         shuffle=False, collate_fn=_collate,
-        num_workers=workers, persistent_workers=False,    # Cache is less helpful here, and this helps keeping the memory
+        num_workers=workers//2, persistent_workers=True if workers > 0 else False,    # 
         prefetch_factor=2 if workers > 0 else None,          # each worker preloads several batches ahead
     )
     # print(f"DataLoader batch_size={train_loader.batch_size}, len={len(train_loader)}, dataset_len={len(train_dataset)}")
 
     # Sets different learning rates for BERT and the GNN to avoid catastrophic forgetting
-    optimizer = torch.optim.AdamW([
-        {"params": model.embedder.parameters(), "lr": lr_bert},  # BERT: small
-        {"params": model.conv1.parameters(),    "lr": lr},  # GAT: normal
-        {"params": model.conv2.parameters(),    "lr": lr},
-        {"params": model.mlp.parameters(),      "lr": lr},
-    ], weight_decay=0.01)
+    embedder_params = []
+    other_params = []
+
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue  # skip frozen BERT layers, no point adding them to a group
+        if name.startswith("embedder."):
+            embedder_params.append(param)
+        else:
+            other_params.append(param)
+
+    param_groups = [
+        {"params": embedder_params, "lr": lr_bert},
+        {"params": other_params,    "lr": lr},
+    ]
+
+    optimizer = torch.optim.AdamW(param_groups, weight_decay=0.01)
 
     criterion = nn.CrossEntropyLoss()
     scaler    = torch.amp.GradScaler(device=device)
@@ -100,7 +111,8 @@ def _train(model, train_dataset, val_dataset, epochs=20, lr_bert=2e-5, lr=2e-4, 
 
         for batch in tqdm(train_loader, desc=f"Epoch {epoch+1} train"): # Iterate through batches
             optimizer.zero_grad(set_to_none=True) # Restart gradients
-            y = torch.cat([item.pyg_data.y for item in batch]).to(device) # Target values
+            # y = torch.cat([item.pyg_data.y for item in batch]).to(device) # Target values
+            y = torch.cat([item.y for item in batch]).to(device) # Target values
 
             with torch.amp.autocast(device_type=device.type): # Mixed-precision (FP16) for faster training
                 logits = model(batch) # Process the batch
@@ -128,7 +140,7 @@ def _train(model, train_dataset, val_dataset, epochs=20, lr_bert=2e-5, lr=2e-4, 
 
                 with torch.no_grad(): # No gradients, so no need to build the graph
                     for v_batch in tqdm(val_loader, desc="  val", leave=False):
-                        v_y = torch.cat([item.pyg_data.y for item in v_batch]).to(device)
+                        v_y = torch.cat([item.y for item in v_batch]).to(device)
                         with torch.amp.autocast(device_type=device.type):
                             v_logits = model(v_batch)
                             v_loss = criterion(v_logits, v_y)
@@ -195,7 +207,7 @@ def _train(model, train_dataset, val_dataset, epochs=20, lr_bert=2e-5, lr=2e-4, 
     return losses, val_losses, accuracies, val_accuracies
 
 # Abstracted train function
-def train(model, dataset: str, epochs:int=5, batch_size:int=16, validation_steps:int=2500, patience:int=3, workers:int=0, model_save_path:str='../Models/model.pt', log_save_path:str="../Logs/log.txt", ablation = False, run=1):
+def train(model, dataset: str, epochs:int=5, batch_size:int=16, validation_steps:int=2500, patience:int=3, workers:int=0, model_save_path:str='../Models/model.pt', log_save_path:str="../Logs/log.txt", ablation = False, run=1, dataset_class = GraphDataset):
     if not Path("../Datasets/").exists() or not Path("../Logs/").exists() or not Path("../Models/").exists() or not Path("../Results/").exists(): # If folder structure is incomplete
         # Build it
         datasets = ["2WikiMultihopQA", "HotpotQA", "MuSiQue"]
@@ -232,15 +244,26 @@ def train(model, dataset: str, epochs:int=5, batch_size:int=16, validation_steps
     else:
         raise ValueError(f'Dataset field is required and must be one of the following: HotpotQA, 2WikiMultihopQA, or MuSiQue. Value sent was {dataset}')
     
-    train_dataset = GraphDataset(convert_to_tuple(train_df))
-    val_dataset   = GraphDataset(convert_to_tuple(val_df))
-    test_dataset  = GraphDataset(convert_to_tuple(test_df))
+    train_dataset = dataset_class(convert_to_tuple(train_df))
+    val_dataset   = dataset_class(convert_to_tuple(val_df))
+    test_dataset  = dataset_class(convert_to_tuple(test_df))
     
+    if ablation:
+        if dataset_class == SyntacticGraphDataset:
+            ablation_type = "Syntactic"
+        elif dataset_class == TextDataset:
+            ablation_type = "Semantic"
+        elif dataset_class == GraphDataset and model.freeze_bert_layers >= 12:
+            ablation_type = "Transfer"
+        else:
+            ablation_type = "Undefined Ablation"
+    else:
+        ablation_type = None
+
     # Train and test the model
     losses, val_losses, accuracies, val_accuracies = _train(model, train_dataset, val_dataset, epochs=epochs, batch_size=batch_size, validation_steps=validation_steps, patience=patience, workers=workers, model_save_path=model_save_path, log_save_path=log_save_path)
-    tester.generate_training_dashboard(losses, val_losses, accuracies, val_accuracies, steps_until_val=validation_steps, img_path=f"../Results/{dataset}/{'Ablation/' if ablation else ''}[TRAIN] {dataset}; {run}.png", title=f"GAT Training ({dataset}, {run})")
-    
-    probs, _, acc, cm, _, _, auc_score = tester.test(model, test_dataset, batch_size=batch_size, workers=workers)
+    tester.generate_training_dashboard(losses, val_losses, accuracies, val_accuracies, steps_until_val=validation_steps, img_path=f"../Results/{dataset}/{'Ablation/' if ablation else ''}[TRAIN] {dataset} {ablation_type}; {run}.png", title=f"GAT Training ({dataset}, {run})")
+
+    probs, _, y_true, acc, cm, _, _, auc_score = tester.test(model, test_dataset, batch_size=batch_size, workers=workers//2)
     pos_probabilities = probs[:, 1]
-    y_true = torch.cat([data.pyg_data.y for data in test_dataset], dim=0)
-    tester.generate_test_dashboard(cm, acc, auc_score, pos_probabilities, y_true, img_path=f"../Results/{dataset}/{'Ablation/' if ablation else ''}[TEST] {dataset}; {run}.png", title=f"GAT Testing ({dataset}, {run})")
+    tester.generate_test_dashboard(cm, acc, auc_score, pos_probabilities, y_true, img_path=f"../Results/{dataset}/{'Ablation/' if ablation else ''}[TEST] {ablation_type} {dataset}; {run}.png", title=f"GAT Testing ({dataset}, {run})")

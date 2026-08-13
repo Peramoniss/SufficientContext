@@ -20,7 +20,7 @@ def test(model, test_dataset, batch_size=16, workers=0):
     test_loader = TorchDataLoader(
         test_dataset, batch_size=batch_size,
         shuffle=False,  collate_fn=_collate,
-        num_workers=workers, persistent_workers=True if workers > 0 else False,    # keeps workers (and their in-process cache) alive across epochs
+        num_workers=workers, persistent_workers=False, #True if workers > 0 else False, -> off since my memory can't deal with cache    # keeps workers (and their in-process cache) alive across epochs
         prefetch_factor=2 if workers > 0 else None,          # each worker preloads several batches ahead
     )
     model.eval() # Switch dropout to evaluation behavior
@@ -31,20 +31,18 @@ def test(model, test_dataset, batch_size=16, workers=0):
     
     complete_probs = []
     complete_correct_labels = []
-    
     with torch.no_grad(): # No gradients
-        for batch in tqdm(test_loader, desc="Testing the model..", leave=False):
+        for batch in tqdm(test_loader, desc="Testing the model..", leave=True):
             with torch.amp.autocast(device_type=device.type): # Mixed-precision (FP16) for faster inference
                 logits = model(batch)
                 probs = torch.softmax(logits, dim=1) # Compute raw probabilities since loss is irrelevant
             
             # Handle probs on CPU since paralelism isn't used anymore
             complete_probs.append(probs.to("cpu"))
-            complete_correct_labels.append(torch.cat([item.pyg_data.y for item in batch]).to('cpu'))
+            complete_correct_labels.append(torch.cat([item.y for item in batch]).to('cpu'))
 
         final_probabilities = torch.cat(complete_probs, dim=0).numpy()
         final_true_labels = torch.cat(complete_correct_labels, dim=0).numpy()
-        
         
         preds = final_probabilities.argmax(axis=1) # Predictions defined using the max value along the class dimension
         acc = (preds == final_true_labels).sum() / len(final_probabilities)
@@ -56,8 +54,7 @@ def test(model, test_dataset, batch_size=16, workers=0):
             area_under_curve = auc(fpr, tpr)
         else:
             fpr, tpr, thresholds, area_under_curve = None, None, None, "Multi-class AUC requires macro/micro strategy using each class as reference"
-
-    return final_probabilities, preds, acc, cm, tpr, thresholds, area_under_curve
+    return final_probabilities, preds, final_true_labels, acc, cm, tpr, thresholds, area_under_curve
 
 def generate_training_dashboard(
     train_losses,
@@ -183,6 +180,7 @@ def generate_training_dashboard(
 
     plt.savefig(img_path, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor()) # Save the image in the defined path
     print(f"Saved → {img_path}")
+    plt.close(fig)
 
 def generate_test_dashboard(cm, acc, auc_score, probs, y_true, img_path='dashboard.png', title="Model Evaluation Dashboard", automatic_overwrite=False):
     # Allows the user to not overwrite an important file if they forgot to chose a correct name
@@ -296,3 +294,4 @@ def generate_test_dashboard(cm, acc, auc_score, probs, y_true, img_path='dashboa
         f.write(f"{seed}, {acc}, {f1}, {precision}, {recall}, {auc_score}\n")
 
     print(f"Saved → {img_path}")
+    plt.close(fig)

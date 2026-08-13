@@ -28,41 +28,8 @@ def set_bert(new_bert_model: str):
     global BERT_MODEL
     BERT_MODEL = new_bert_model
 
-nlp = spacy.load("en_core_web_lg", disable=["ner"]) # Dependency parser; syntactic knowledge 
-tokenizer  = AutoTokenizer.from_pretrained(BERT_MODEL)
-# bert_model = AutoModel.from_pretrained(BERT_MODEL)
-# bert_model.eval() # Fix BERT into evaluation mode until training occurs
-
-def graphy(text):
-  doc = nlp(text) # Parse the text
-  G = nx.DiGraph() # Initialize a Directed Graph using NetworkX
-
-  # Use the dependency analysis to build the graph
-  for token in doc: # For each word (spacy token)
-      G.add_edge(token.head.text.lower(), token.text.lower(), label=token.dep_) # Add an edge from HEAD to the word, using the dependency label as the edge attribute
-
-  return G, doc
-
-def convert_nx_to_pyg(G): # Convert nx to pyg
-    # Indexes the words that represent the nodes
-    nodes_list = list(G.nodes())
-    node_to_idx = {node: i for i, node in enumerate(nodes_list)}
-
-    # Convert edges format. PyG expects a shape of [2, num_edges] containing source and target indices
-    edge_indices = []
-    # edge_labels = []
-    for u, v, data in G.edges(data=True):
-        source_idx = node_to_idx[u]
-        target_idx = node_to_idx[v]
-        edge_indices.append([source_idx, target_idx])
-
-    edge_index = torch.tensor(edge_indices, dtype=torch.long).t().contiguous() # Transpose to get the required [2, num_edges] shape
-
-    pyg_data = Data(edge_index=edge_index) # Finally converts into pyg
-
-    return pyg_data, node_to_idx
-
 # Define nodes and edges to filter
+nlp = spacy.load("en_core_web_lg", disable=["ner"]) # Dependency parser; syntactic knowledge 
 stop_words = nlp.Defaults.stop_words
 keep_words = set([
     # Negations
@@ -86,6 +53,51 @@ remove_punct = [
 stopwords_to_clean = stop_words - set(keep_words)
 stopwords_to_clean.update(remove_punct)
 unwanted_edges = {'punct', 'det', 'dep'}
+tokenizer  = AutoTokenizer.from_pretrained(BERT_MODEL)
+# bert_model = AutoModel.from_pretrained(BERT_MODEL)
+# bert_model.eval() # Fix BERT into evaluation mode until training occurs
+
+def graphy(text, semantic = True):
+    doc = nlp(text) # Parse the text
+    G = nx.DiGraph() # Initialize a Directed Graph using NetworkX
+
+    # Use the dependency analysis to build the graph
+    for token in doc: # For each word (spacy token)
+        G.add_edge(token.head.text.lower(), token.text.lower(), label=token.dep_) # Add an edge from HEAD to the word, using the dependency label as the edge attribute
+
+    if not semantic:
+        # Attach word2vec-style embeddings as node features when the graph is syntactic-only
+        for node in G.nodes():
+            lex = nlp.vocab[node]  # look up by string, no need to re-parse
+            if lex.has_vector:
+                G.nodes[node]["embedding"] = torch.tensor(lex.vector, dtype=torch.float)
+            else:
+                G.nodes[node]["embedding"] = torch.zeros(nlp.vocab.vectors_length, dtype=torch.float)
+
+    return G, doc
+
+def convert_nx_to_pyg(G): # Convert nx to pyg
+    # Indexes the words that represent the nodes
+    nodes_list = list(G.nodes())
+    node_to_idx = {node: i for i, node in enumerate(nodes_list)}
+
+    # Convert edges format. PyG expects a shape of [2, num_edges] containing source and target indices
+    edge_indices = []
+    # edge_labels = []
+    for u, v, data in G.edges(data=True):
+        source_idx = node_to_idx[u]
+        target_idx = node_to_idx[v]
+        edge_indices.append([source_idx, target_idx])
+
+    edge_index = torch.tensor(edge_indices, dtype=torch.long).t().contiguous() # Transpose to get the required [2, num_edges] shape
+
+    if "embedding" in G.nodes[nodes_list[0]]: # Converts to pyg with fixed embeddings
+        x = torch.stack([G.nodes[node]["embedding"] for node in nodes_list])
+        pyg_data = Data(x=x, edge_index=edge_index)
+    else:
+        pyg_data = Data(edge_index=edge_index) # Finally converts into pyg
+
+    return pyg_data, node_to_idx
 
 def filter_dependency_graph(G, structural_stopwords):
     filtered_G = G.copy() # Work on a copy so we don't mutate the original graph unexpectedly
@@ -156,12 +168,12 @@ def precompute_bert_alignment(chunks: list):
 
     return chunk_ids, chunk_offsets, spacy_bounds
 
-def process_instance(question: str, chunks: list):
+def process_semantic_instance(question: str, chunks: list):
     iterr = [question] + chunks
 
     complete_G = None
     for chunk in iterr:
-        G, _ = graphy(chunk)
+        G, _ = graphy(chunk, semantic=True)
         complete_G = G if complete_G is None else nx.compose(complete_G, G)
 
     complete_G = filter_dependency_graph(complete_G, stopwords_to_clean)
@@ -174,3 +186,20 @@ def process_instance(question: str, chunks: list):
     chunk_ids, chunk_offsets, spacy_bounds = precompute_bert_alignment(chunks)
 
     return pyg_graph, node_words, chunk_ids, chunk_offsets, spacy_bounds
+
+def process_syntactic_only_instance(question: str, chunks: list):
+    iterr = [question] + chunks
+
+    complete_G = None
+    for chunk in iterr:
+        G, _ = graphy(chunk, semantic=False)
+        complete_G = G if complete_G is None else nx.compose(complete_G, G)
+
+    complete_G = filter_dependency_graph(complete_G, stopwords_to_clean)
+
+    pyg_graph, node_to_id = convert_nx_to_pyg(complete_G)
+
+    id_to_node = {v: k for k, v in node_to_id.items()}
+    node_words  = [id_to_node[i] for i in range(len(id_to_node))]
+
+    return pyg_graph, node_words # Maybe not even node_words

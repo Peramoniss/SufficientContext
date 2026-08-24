@@ -41,7 +41,7 @@ def _train(model, train_dataset, val_dataset, epochs=20, lr_bert=2e-5, lr=2e-4, 
     train_loader = TorchDataLoader(
         train_dataset, batch_size=batch_size, 
         shuffle=True,  collate_fn=_collate,
-        num_workers=workers, persistent_workers=False, #True if workers > 0 else False -> took it off since my memory can't support the cache    # keeps workers (and their in-process cache) alive across epochs
+        num_workers=workers, persistent_workers=True if workers > 0 else False, #True if workers > 0 else False -> took it off since my memory can't support the cache    # keeps workers (and their in-process cache) alive across epochs
         prefetch_factor=2 if workers > 0 else None,          # each worker preloads several batches ahead
     )
     val_loader = TorchDataLoader(

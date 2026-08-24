@@ -4,22 +4,30 @@ from ModelTrainer.graphFunctions import set_seed
 from Tester.generalizer import generalization_test
 import torch
 import random
+# import resource
 
 if __name__ == "__main__":
+    # rlimit = resource.getrlimit(resource.RLIMIT_NOFILE)
+    # resource.setrlimit(resource.RLIMIT_NOFILE, (1048576, rlimit[1]))
+    torch.multiprocessing.set_sharing_strategy('file_system')
     print("GPU count:", torch.cuda.device_count())
     seeds = []
+    ultra_prohibited_seeds = [24] # Used to be able to run in different machines
     RUNS_PER_TRAINING = 3
     BATCH_SIZE = 32
-    WORKERS = 16
+    WORKERS = 8
     print("INFO: The tokenizer will be downloaded once per worker. Expect WORKERS+1 calls for hugging face")
     print("INFO: Longer sequence lengths in tokenization are expected and treated within the code")
 
-    for run in range(1, RUNS_PER_TRAINING+1): # Five runs per training, to show it isn't a lucky seed 
+    for _ in range(1, RUNS_PER_TRAINING+1-len(seeds)):
         seed = random.randint(1, 101)
-        while seed in seeds: # Avoid repeated seeds
+        while seed in ultra_prohibited_seeds: # Avoid repeated seeds
             seed = random.randint(1, 101)
-        set_seed(seed) # Reset the seed every run
         seeds.append(seed)
+        ultra_prohibited_seeds.append(seed) # Prohibit from repeating that seed
+
+    for run, seed in enumerate(seeds): # Five runs per training, to show it isn't a lucky seed 
+        set_seed(seed) # Reset the seed every run
         for dataset, vs in [("2WikiMultihopQA", 2500), ("HotpotQA", 1250), ("MuSiQue", 1250)]: # Different validation steps for each dataset since each has different length
             # Train every dataset with the same seed before moving to another
             model = GATWithBERT(hidden_channels=32, num_classes=2, heads=8, dropout_rate=0.2, freeze_bert_layers=6)

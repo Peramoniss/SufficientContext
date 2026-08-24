@@ -1,0 +1,68 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sufficiency-training
+  namespace: eepereira #colocar o namespace de vocês 
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      imagePullSecrets:         
+        - name: gitea-key
+      # nodeName: vanhalen #pode apagar se tanto faz em qual nodo for cair
+      restartPolicy: Never
+      initContainers:
+      - name: raise-ulimit
+        image: busybox:latest
+        securityContext:
+          capabilities:
+            add:
+            - SYS_RESOURCE
+        command:
+        - sh
+        - -c
+        - "ulimit -n 1048576"
+      containers:
+      - name: compute-task
+        image: gitea.k8s.inf.ufrgs.br/eepereira/sufficiency_training:v1.0.4  # Subsitui pela sua imagem
+        tty: true    
+        stdin: true
+        workingDir: /app/src #geralmente não precisa, já vem na imagem
+        command: ["python", "-u", "main.py"] # python", "-u", "main.py
+        env:
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        resources: #muito importante colocar um limite, evita problemas
+          requests:
+            cpu: 24
+            memory: 32Gi
+            nvidia.com/gpu: 1
+          limits:
+            cpu: 32
+            memory: 48Gi
+            nvidia.com/gpu: 1
+          # requests:
+          #   cpu: 1
+          #   memory: 8Gi
+          #   nvidia.com/gpu: 0
+          # limits:
+          #   cpu: 2
+          #   memory: 16Gi
+          #   nvidia.com/gpu: 0
+        volumeMounts:
+        # Monta as 3 pastas na raiz onde o main.py é executado (/app/src)
+        - name: program-data # Igual ao do volumes abaixo
+          mountPath: /app/Logs  # Nome no container
+          subPath: Logs # Nome da pasta no volume
+        - name: program-data
+          mountPath: /app/Models  # Substitua pelo nome da pasta 2
+          subPath: Models
+        - name: program-data
+          mountPath: /app/Results  # Substitua pelo nome da pasta 3
+          subPath: Results
+      volumes:
+      - name: program-data
+        persistentVolumeClaim:
+          claimName: gpu-job-data-pvc # Nome do pvc
+
+# kubectl apply -f job.yaml

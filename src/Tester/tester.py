@@ -182,7 +182,7 @@ def generate_training_dashboard(
     print(f"Saved → {img_path}")
     plt.close(fig)
 
-def generate_test_dashboard(cm, acc, auc_score, probs, y_true, img_path='dashboard.png', title="Model Evaluation Dashboard", automatic_overwrite=False):
+def generate_test_dashboard(cm, acc, auc_score, probs, y_true, seed, img_path='dashboard.png', title="Model Evaluation Dashboard", automatic_overwrite=False):
     # Allows the user to not overwrite an important file if they forgot to chose a correct name
     if Path(img_path).is_file() and automatic_overwrite == False:
         choice = input("This filename already exists. How do you want to proceed? [o] Overwrite; [c] Cancel; [r] Rename")
@@ -283,7 +283,6 @@ def generate_test_dashboard(cm, acc, auc_score, probs, y_true, img_path='dashboa
 
     plt.savefig(img_path, dpi=150, bbox_inches='tight') # Save the dashboard in the defined path
 
-    seed = get_seed()
     folder_structure = img_path.rsplit('/', 1)[0] # Split from right to left, stop after one / found. Serves to mark which dataset is being used
     folder_structure = folder_structure + "/results.csv" # Finish the path file
     if not Path(folder_structure).exists(): # If the file doesn't exist, create the file with the header

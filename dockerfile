@@ -1,5 +1,6 @@
 FROM python:3.14-slim
 
+COPY Datasets /app/Datasets
 COPY src /app/src
 # Copy only requirements first to leverage Docker layer caching
 COPY requirements.txt /app

@@ -5,6 +5,7 @@ import torch
 import numpy as np
 from torch_geometric.data import Data
 import random
+from sklearn.feature_extraction.text import TfidfVectorizer
 
 BERT_MODEL = "bert-base-uncased" # Define hugging face's BERT model address
 SEED = 0
@@ -186,6 +187,49 @@ def process_semantic_instance(question: str, chunks: list):
     chunk_ids, chunk_offsets, spacy_bounds = precompute_bert_alignment(chunks)
 
     return pyg_graph, node_words, chunk_ids, chunk_offsets, spacy_bounds
+
+def process_doc_graph_instance(chunks: list[str], threshold = 0.15):
+    num_chunks = len(chunks)
+    # 1. Compute term frequency/overlap using CountVectorizer or TfidfVectorizer
+    # This automatically handles lowercasing, tokenization, and stop words.
+    vectorizer = TfidfVectorizer(stop_words='english')
+    tfidf_matrix = vectorizer.fit_transform(chunks)
+    
+    # Compute dot product to get pairwise overlap / similarity
+    similarity_matrix = (tfidf_matrix * tfidf_matrix.T).toarray()
+    sources, targets = [], []
+    #Complete graph (every document with every document)
+    for i in range(num_chunks):
+        for j in range(num_chunks):
+            if i != j and similarity_matrix[i, j] > 0.15:
+                sources.append(i)
+                targets.append(j)
+    
+    # # 3. Extract upper triangle without the diagonal (i < j)
+    # upper_i, upper_j = np.triu_indices_from(similarity_matrix, k=1)
+    # mask = similarity_matrix[upper_i, upper_j] >= threshold
+    # filtered_sources = upper_i[mask]
+    # filtered_targets = upper_j[mask]
+
+    # # # 5. Mirror edges to make the graph bidirectional (i -> j and j -> i)
+    # sources = np.concatenate([filtered_sources, filtered_targets])
+    # targets = np.concatenate([filtered_targets, filtered_sources])
+                
+    # edge_indexes = torch.tensor([sources, targets], dtype=torch.long)
+    edge_indexes = torch.from_numpy(np.stack([sources, targets])).long()
+    pyg_graph = Data(edge_index=edge_indexes)
+
+    chunks_ids = []
+    for chunk in chunks:
+        enc_chunk = tokenizer(
+            chunk,
+            return_tensors="pt",
+            truncation=False
+        )
+        chunks_ids.append(enc_chunk["input_ids"][0])
+
+    chunks_ids = torch.nn.utils.rnn.pad_sequence(chunks_ids, batch_first=True, padding_value=tokenizer.pad_token_id)       
+    return pyg_graph, chunks_ids
 
 def process_syntactic_only_instance(question: str, chunks: list):
     iterr = [question] + chunks

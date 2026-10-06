@@ -80,7 +80,7 @@ def convert_to_tuple(df):
     return question_context_tuples
 
 # Process the text and generate embeddings to them, associating the embeddings with the graph nodes
-class BertNodeEmbedder(nn.Module):
+class BertWordEmbedder(nn.Module):
     def __init__(self):
         super().__init__()
         # self.tokenizer = AutoTokenizer.from_pretrained(bert_model_name)
@@ -191,7 +191,7 @@ class BertNodeEmbedder(nn.Module):
 
         return torch.stack(embeddings)
 
-class GATWithBERT(nn.Module):
+class SyntacticGATWithBERT(nn.Module):
     def __init__(
         self,
         bert_model_name:  str  = "bert-base-uncased",
@@ -204,9 +204,10 @@ class GATWithBERT(nn.Module):
         super().__init__()
         self.dropout_rate = dropout_rate
 
-        self.embedder = BertNodeEmbedder()
+        self.embedder = BertWordEmbedder()
         in_channels   = self.embedder.bert.config.hidden_size # 768 for default BERT
 
+        self.freeze_bert_layers = freeze_bert_layers
         self._freeze_bert_layers(freeze_bert_layers) # Freeze BERT layers to avoid catastrophic forget and increase training performance
 
         # GAT Layers
@@ -434,7 +435,7 @@ class DirectEmbedder(nn.Module):
                 break
             window_start += step
 
-        pooled = summed / max(total_count, 1)
+        pooled = summed / max(total_count, 1) # Avoid division by zero, even though it shouldn't ever happen
         return pooled
 
 class SemanticOnlyBERT(nn.Module):
@@ -451,6 +452,7 @@ class SemanticOnlyBERT(nn.Module):
         self.embedder = DirectEmbedder(bert_model_name)
         in_channels   = self.embedder.bert.config.hidden_size # 768 for default BERT
 
+        self.freeze_bert_layers = freeze_bert_layers
         self._freeze_bert_layers(freeze_bert_layers) # Freeze BERT layers to avoid catastrophic forget and increase training performance
 
         # Classification head
@@ -489,4 +491,184 @@ class SemanticOnlyBERT(nn.Module):
 
         x = torch.stack(embeddings).to(device)  # [BATCH, H]
         logits = self.mlp(x)                    # [BATCH, num_classes]
+        return logits
+
+class NodeDocData:
+    def __init__(self, pyg_data, question: str, chunks: list[str], chunks_ids: list[torch.Tensor]):
+        self.pyg_data   = pyg_data      # torch_geometric.data.Data  (x is spaCy placeholder)
+        self.y = pyg_data.y
+        self.question   = question
+        self.chunks     = chunks
+        self.chunks_ids = chunks_ids
+
+# Container for easier accesss of the data 
+class DocGraphDataset(Dataset):
+    def __init__(self, tuples: list, cache=False): # Might turn the cache off if memory can't store it
+        self.tuples = tuples
+        self.cache = cache
+        self._structure_cache = {} if cache else None
+
+    def __len__(self):
+        return len(self.tuples)
+
+    def _build_structure(self, idx):
+        question, chunks, label = self.tuples[idx]
+        pyg_graph, chunks_ids = graphFunctions.process_doc_graph_instance(chunks)
+        pyg_graph.y = torch.tensor([label], dtype=torch.long)
+        return NodeDocData(pyg_graph, question=question, chunks=chunks, chunks_ids=chunks_ids)
+
+    # TODO: REMOVE CACHE
+    def __getitem__(self, pos):
+        if self.cache: # If using cache
+            if pos not in self._structure_cache: # Build the graph and save in cache in the first iteration, only returning the cached structure after that
+                self._structure_cache[pos] = self._build_structure(pos)
+            return self._structure_cache[pos]
+        return self._build_structure(pos) # If not, always build the structure
+
+# Process the text and generate embeddings to them, associating the embeddings with the graph nodes
+class BERTDocEmbedder(nn.Module):
+    def __init__(self):
+        super().__init__()
+        # self.tokenizer = AutoTokenizer.from_pretrained(bert_model_name)
+        self.tokenizer = graphFunctions.tokenizer
+        self.bert = AutoModel.from_pretrained(graphFunctions.BERT_MODEL) # bert_model_name
+        # self.bert = graphFunctions.bert_model
+
+    def forward(self, question: str, chunks_ids: torch.Tensor) -> torch.Tensor:
+        device = next(self.bert.parameters()).device
+        MAX_LEN = self.bert.config.max_position_embeddings
+        H = self.bert.config.hidden_size
+
+        enc_query = self.tokenizer(question, return_tensors="pt", truncation=False)
+        query_ids = enc_query["input_ids"][0][1:-1]
+
+        chunk_budget = MAX_LEN - 3 - len(query_ids)
+
+        sep_id = torch.tensor([self.tokenizer.sep_token_id])
+        cls_id = torch.tensor([self.tokenizer.cls_token_id])
+
+
+        # step = max(1, chunk_budget // 2)
+        step = max(1, chunk_budget * 3 // 4) # Passos mais largos
+
+        embeddings = []
+        for chunk_ids in chunks_ids:
+            valid_mask = chunk_ids != self.tokenizer.pad_token_id
+            chunk_ids = chunk_ids[valid_mask]
+            window_start = 0
+            position_hidden: dict[int, list[torch.Tensor]] = {}
+
+            num_chunk_tokens = len(chunk_ids)
+            while window_start < num_chunk_tokens:
+                window_end = min(window_start + chunk_budget, num_chunk_tokens)
+                window_ids = chunk_ids[window_start:window_end]
+
+                input_ids = torch.cat([
+                    cls_id, query_ids, sep_id, window_ids, sep_id
+                ]).unsqueeze(0).to(device)
+
+                attention_mask = torch.ones_like(input_ids)
+                type_0_len = 1 + len(query_ids) + 1
+                type_1_len = len(window_ids) + 1
+                token_type_ids = torch.cat([
+                    torch.zeros(type_0_len, dtype=torch.long),
+                    torch.ones(type_1_len, dtype=torch.long)
+                ]).unsqueeze(0).to(device)
+
+                hidden = self.bert(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    token_type_ids=token_type_ids
+                ).last_hidden_state[0]
+
+                for local_i, global_i in enumerate(range(window_start, window_end)):
+                    position_hidden.setdefault(global_i, []).append(hidden[local_i + type_0_len])
+
+                if window_end == num_chunk_tokens:
+                    break
+                window_start += step
+
+            token_embeddings = torch.stack([
+                torch.stack(vecs).mean(dim=0)
+                for pos, vecs in sorted(position_hidden.items())
+            ])
+            chunk_embedding = token_embeddings.mean(dim=0)  # Shape: [H]
+            embeddings.append(chunk_embedding)
+
+        return torch.stack(embeddings)
+
+class DocGATWithBERT(nn.Module):
+    def __init__(
+        self,
+        bert_model_name:  str  = "bert-base-uncased",
+        hidden_channels:  int  = 128,
+        num_classes:      int  = 2,
+        heads:            int  = 4,
+        dropout_rate:     float = 0.1,
+        freeze_bert_layers: int = 8,    # Freeze first N transformer layers
+    ):
+        super().__init__()
+        self.dropout_rate = dropout_rate
+
+        self.embedder = BERTDocEmbedder()
+        in_channels   = self.embedder.bert.config.hidden_size # 768 for default BERT
+
+        self.freeze_bert_layers = freeze_bert_layers
+        self._freeze_bert_layers(freeze_bert_layers) # Freeze BERT layers to avoid catastrophic forget and increase training performance
+
+        # GAT Layers
+        self.conv1 = GATv2Conv(in_channels, hidden_channels, heads=heads, dropout=dropout_rate)
+        self.conv2 = GATv2Conv(hidden_channels * heads, hidden_channels, heads=1, concat=False, dropout=dropout_rate)
+
+        # Classification head
+        mlp_input_dim = (hidden_channels * heads) + hidden_channels
+        mlp_hidden    = hidden_channels * 2
+        self.mlp = nn.Sequential(
+            nn.Linear(mlp_input_dim, mlp_hidden),
+            nn.LayerNorm(mlp_hidden),
+            nn.ELU(),
+            nn.Dropout(p=dropout_rate),
+            nn.Linear(mlp_hidden, num_classes)
+        )
+
+    def _freeze_bert_layers(self, n: int):
+        # Freeze the look-up table, for changing it could be forcing the embeddings to represent what's useful for the task instead of what the word means, introducing shortcut learning
+        for param in self.embedder.bert.embeddings.parameters():
+            param.requires_grad = False
+
+        # Freeze the first N transformer layers from BERT, leaving the last Layers - N layers to be fine-tuned    
+        for layer in self.embedder.bert.encoder.layer[:n]:
+            for param in layer.parameters():
+                param.requires_grad = False
+
+    def _get_number_of_parameters(self):
+        total_params = sum(p.numel() for p in self.parameters())
+        trainable_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+        return {"Total params": total_params, "Trainable params": trainable_params}
+
+    def forward(self, batch: list):
+        device = next(self.parameters()).device
+        data_list = []
+
+        for item in batch:
+            x = self.embedder(item.question, item.chunks_ids)
+            data_list.append(Data(x=x, edge_index=item.pyg_data.edge_index))
+
+        merged = Batch.from_data_list(data_list).to(device)
+        x, edge_index, batch_vec = merged.x, merged.edge_index, merged.batch
+
+        # GAT processing (shape examples considering 8 heads of hidden_dim = 32)
+        x = self.conv1(x, edge_index) # [words, 256]
+        x = F.elu(x) # Non-linear activation function
+        x = F.dropout(x, p=self.dropout_rate, training=self.training) # Regularization
+        # Skip connection, keeping the first GAT knowledge and helping in regularization. Mean pool transforms from [words, 256] to [BATCH, 256], one embedding per batch
+        skip = global_mean_pool(x, batch_vec) # [BATCH, 256]
+
+        x = self.conv2(x, edge_index) # [words, 32]
+        x = F.elu(x) # Non-linear activation function
+        x = F.dropout(x, p=self.dropout_rate, training=self.training) # Regularization
+        x = global_mean_pool(x, batch_vec) # [BATCH, 32]
+
+        logits = self.mlp(torch.cat([skip, x], dim=1)) # [BATCH, 288] -> [BATCH, 64] -> [BATCH, 2], the final prediction
         return logits

@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: index-pvc
+  name: gpu-job-data-pvc
   namespace: eepereira #colocar o namespace de vocês
 spec:
   storageClassName: longhorn
@@ -9,4 +9,4 @@ spec:
     - ReadWriteOnce #ReadWriteMany
   resources:
     requests:
-      storage: 300Gi
+      storage: 200Gi

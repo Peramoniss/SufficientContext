@@ -1,8 +1,14 @@
 *.pt
 *.csv
+*.gz
+*.tar
+*.zip
 __pycache__/
 .vscode/
 Datasets/
 Logs/
 Models/
+Results/
 src/TestCodes
+TODO.md
+ClusterDownloads/

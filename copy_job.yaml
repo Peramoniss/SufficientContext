@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: sufficiency-training
+  name: pvc-transfer-job
   namespace: eepereira #colocar o namespace de vocês 
 spec:
   backoffLimit: 2
@@ -9,7 +9,7 @@ spec:
     spec:
       imagePullSecrets:         
         - name: gitea-key
-      # nodeName: vanhalen #pode apagar se tanto faz em qual nodo for cair
+      nodeName: vanhalen #pode apagar se tanto faz em qual nodo for cair
       restartPolicy: Never
       # initContainers:
       # - name: raise-ulimit
@@ -23,25 +23,26 @@ spec:
       #   - -c
       #   - "ulimit -n 1048576"
       containers:
-      - name: compute-task
-        image: gitea.k8s.inf.ufrgs.br/eepereira/sufficiency_training:v1.0.7  # Subsitui pela sua imagem
-        imagePullPolicy: Always
-        tty: true    
+      - name: exporter
+        image: busybox:latest
+        command: ["sh", "-c"]
+        args:
+        - |
+          echo "=== PVC Exporter Ready ==="
+          echo "Copy your files using kubectl cp, then press ENTER in this terminal to terminate the pod."
+          read -p "Press ENTER to finish..." unused_var
+          echo "Exiting..."
         stdin: true
-        workingDir: /app/src #geralmente não precisa, já vem na imagem
-        command: ["python", "-u", "main.py"] # python", "-u", "main.py
-        env:
-        - name: PYTHONUNBUFFERED
-          value: "1"
+        tty: true
         resources: #muito importante colocar um limite, evita problemas
           requests:
-            cpu: 24
-            memory: 32Gi
-            nvidia.com/gpu: 1
+            cpu: 1
+            memory: 2Gi
+            nvidia.com/gpu: 0
           limits:
-            cpu: 32
-            memory: 40Gi
-            nvidia.com/gpu: 1
+            cpu: 1
+            memory: 4Gi
+            nvidia.com/gpu: 0
           # requests:
           #   cpu: 1
           #   memory: 8Gi
@@ -61,9 +62,25 @@ spec:
         - name: program-data
           mountPath: /app/Results  # Substitua pelo nome da pasta 3
           subPath: Results
+        - name: program-data # Igual ao do volumes abaixo
+          mountPath: /app/index  # Nome no container
+          subPath: index # Nome da pasta no volume
+          readOnly: false
+        - name: program-data # Igual ao do volumes abaixo
+          mountPath: /app/documents  # Nome no container
+          subPath: documents # Nome da pasta no volume
+          readOnly: false
+        - name: program-data # Igual ao do volumes abaixo
+          mountPath: /app/models  # Nome no container
+          subPath: models # Nome da pasta no volume
+          readOnly: false
+        - name: program-data # Igual ao do volumes abaixo
+          mountPath: /app/results  # Nome no container
+          subPath: results # Nome da pasta no volume
+          readOnly: false
       volumes:
       - name: program-data
         persistentVolumeClaim:
-          claimName: gpu-job-data-pvc # Nome do pvc
+          claimName: index-pvc # Nome do pvc
 
 # kubectl apply -f job.yaml

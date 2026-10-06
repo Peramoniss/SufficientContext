@@ -25,6 +25,7 @@ def get_sufficient_context_std_format(df, desired_context_size : int = 5):
         contexts = []
 
         sup_facts = row['supporting_facts']['title']
+        refs = set(sup_facts)
         curr_context = row['context']
         for c_id, c_title in enumerate(curr_context['title']):
             if c_title in sup_facts: # Verify if the context is necessary
@@ -42,6 +43,7 @@ def get_sufficient_context_std_format(df, desired_context_size : int = 5):
                 break # Once reached the desired context size, stop
 
         df_suff_treated.at[i, 'context'] = contexts # Redefine the context column
+        df_suff_treated.at[i, 'references'] = list(refs) # Redefine the refences column
 
     df_suff_treated['mixed'] = 0
     return df_suff_treated
@@ -55,6 +57,7 @@ def get_insufficient_context_std_format(df, desired_context_size : int = 5):
 
     for i, row in df.iterrows(): # Itera sobre o dataset
         contexts = []
+        refs = set(row['supporting_facts']['title'])
         chunks_in_instance = 0
         if random.uniform(0, 1) < 0.5:
             mixed = True
@@ -62,10 +65,12 @@ def get_insufficient_context_std_format(df, desired_context_size : int = 5):
             mixed = False
 
         for c_id, c_title in enumerate(row['context']['title']): # Para cada chunk de contexto (incluindo distratores)
-            matches = False
-            for fact in row['supporting_facts']['title']: # Para cada contexto necessário
-                if fact == c_title: # Verifica se esse chunk é necessário
-                    matches = True
+            # matches = False
+            # for fact in row['supporting_facts']['title']: # Para cada contexto necessário
+            #     refs.add(fact) # Adiciona 
+            #     if fact == c_title: # Verifica se esse chunk é necessário
+            #         matches = True
+            matches = c_title in row['supporting_facts']['title']
 
             if not matches or (mixed == True and matches): # Se não for necessário (for distrator) ou for necessário mas é para misturar
                 if matches: # Se entrou pela segunda condição
@@ -83,6 +88,7 @@ def get_insufficient_context_std_format(df, desired_context_size : int = 5):
                     chunks_in_instance -= 1 # Mantém a contagem e continua procurando um chunk necessário para adicionar
 
         df_insuff_treated.at[i, 'context'] = contexts
+        df_insuff_treated.at[i, 'references'] = list(refs)
         df_insuff_treated.at[i, 'size'] = chunks_in_instance # Just to guarantee the size is valid
     return df_insuff_treated
 
@@ -108,14 +114,17 @@ def get_sufficient_context_musique_format(df, desired_context_size : int = 5):
        raise ValueError("Context size for musique must be at least 3, otherwise sufficient context will contain insufficient information")
     df_suff_treated = df.copy()
     df_suff_treated["context"] = None
+    df_suff_treated["references"] = None
     df_suff_treated['size'] = 0
 
     for i, row in df.iterrows():
         contexts = []
+        refs = set()
 
         for p in row['paragraphs']: 
-            if p["is_supporting"] == True: # For each necessary chunk
+            if p["is_supporting"] == True: # For each necessary chunk 
                 contexts.append(p["paragraph_text"]) # Add to context
+                refs.add(p["title"])
                 df_suff_treated.at[i, 'size'] += 1
 
         # Introduce noise until reaching the desired size
@@ -125,6 +134,7 @@ def get_sufficient_context_musique_format(df, desired_context_size : int = 5):
                 df_suff_treated.at[i, 'size'] += 1
 
         df_suff_treated.at[i, 'context'] = contexts # Redefine os contextos no novo dataset
+        df_suff_treated.at[i, 'references'] = list(refs) # Redefine os contextos no novo dataset
 
     df_suff_treated['mixed'] = 0
     return df_suff_treated
@@ -145,10 +155,12 @@ def get_insufficient_context_musique_format(df, desired_context_size : int = 5):
     mixed_chance = df_insuff_treated.shape[0] * 0.5 / (df_insuff_treated.shape[0]  - df_insuff_treated["number_of_supporting_facts"].value_counts()[0])
     df_insuff_treated["mixed"] = 0 # Assumes there's no noise, will change otherwise
     df_insuff_treated["context"] = None
+    df_insuff_treated["references"] = None
     df_insuff_treated["size"] = 0
 
     for i, row in df.iterrows(): 
         contexts = []
+        refs = set()
         chunks_in_instance = 0 # More efficient than using len all the time
         if row.get("number_of_supporting_facts", default=0) > 0 and random.uniform(0, 1) < mixed_chance:
             # mixed = True
@@ -160,6 +172,10 @@ def get_insufficient_context_musique_format(df, desired_context_size : int = 5):
 
         for p in row["paragraphs"]:
             supporting = p["is_supporting"]
+
+            if supporting == True: # Clean comparison
+                refs.add(p["title"])
+
             if supporting == False or (supporting == True and mixed_ctr > 0):
                 if supporting:  # If entered by the second condition, manage the counter
                     mixed_ctr -= 1
@@ -175,5 +191,6 @@ def get_insufficient_context_musique_format(df, desired_context_size : int = 5):
                 break
 
         df_insuff_treated.at[i, "context"] = contexts
-
+        df_insuff_treated.at[i, 'references'] = list(refs) # Redefine os contextos no novo dataset
+        
     return df_insuff_treated

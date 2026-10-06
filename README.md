@@ -1,9 +1,10 @@
-Full pipeline system for training and testing a sufficiency identifier.
+Full pipeline system for training and testing a sufficiency classifier.
 
 You can run it directly in your machine or do it using a docker container.
 
 To simply run in your machine, use the following code:
 ```
+pip install -r requirements.txt
 cd src
 python main.py
 ```
